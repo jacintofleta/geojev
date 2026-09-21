@@ -6,6 +6,7 @@ import { writeFileSync } from "node:fs";
 import { feature } from "topojson-client";
 import { presimplify, simplify, quantile } from "topojson-simplify";
 import { geoEqualEarth, geoPath, geoGraticule10 } from "d3-geo";
+import isoCountries from "i18n-iso-countries";
 
 const require = createRequire(import.meta.url);
 const topo = require("world-atlas/countries-50m.json");
@@ -63,6 +64,34 @@ const FULL_NAMES = {
   Vatican: "Vatican City",
 };
 
+// Natural Earth has no ISO code for these.
+const ISO3_OVERRIDES = { Kosovo: "XKX" };
+
+// Most regions a level can have before it's too many to ask Jev about.
+const MAX_REGIONS = 1000;
+
+/**
+ * Administrative levels geoBoundaries has for each country, e.g.
+ * { ESP: [{ level: "ADM1", count: 19 }, { level: "ADM2", count: 52 }] }.
+ * Skips levels that are too big for one query or that repeat the level above.
+ */
+async function fetchLevels() {
+  const levels = {};
+  for (const level of ["ADM1", "ADM2", "ADM3", "ADM4", "ADM5"]) {
+    const res = await fetch(`https://www.geoboundaries.org/api/current/gbOpen/ALL/${level}/`);
+    for (const b of await res.json()) {
+      const count = Number(b.admUnitCount);
+      const list = (levels[b.boundaryISO] ??= []);
+      if (count < 2 || count > MAX_REGIONS) continue;
+      if (list.some((l) => l.count === count)) continue;
+      list.push({ level, count });
+    }
+  }
+  return levels;
+}
+
+const levels = await fetchLevels();
+
 let simplified = presimplify(topo);
 simplified = simplify(simplified, quantile(simplified, 0.1));
 
@@ -88,6 +117,7 @@ const path = geoPath(projection).digits(1);
 // Anchor labels on the largest landmass so France sits in Europe,
 // not halfway to French Guiana.
 function mainland(f) {
+  if (f.geometry.type === "Polygon") return f.geometry;
   if (f.geometry.type !== "MultiPolygon") return f;
   const polygons = f.geometry.coordinates.map((coordinates) => ({
     type: "Polygon",
@@ -102,8 +132,12 @@ const countries = original
     const main = mainland(f);
     const [cx, cy] = path.centroid(main);
     const box = path.bounds(main).flat().map((v) => Math.round(v * 10) / 10);
+    const iso3 = ISO3_OVERRIDES[name] ?? isoCountries.numericToAlpha3(f.id) ?? null;
     return {
       id: f.id ?? name.toLowerCase().replace(/\W+/g, "-"),
+      iso3,
+      // Administrative levels you can drill into, shallowest first.
+      levels: (iso3 && levels[iso3]) || [],
       name: FULL_NAMES[name] ?? name,
       d: path(byName.get(name)) ?? "",
       cx: Math.round(cx * 10) / 10,
@@ -115,6 +149,27 @@ const countries = original
     };
   })
   .sort((a, b) => a.name.localeCompare(b.name));
+
+// Server-only: each drillable country's main landmass in lon/lat. Regions
+// centered on it frame the country view, so far-off islands and exclaves
+// don't shrink the mainland to a speck.
+const mainlands = {};
+for (const f of original) {
+  const iso3 = ISO3_OVERRIDES[f.properties.name] ?? isoCountries.numericToAlpha3(f.id);
+  if (!iso3 || !levels[iso3]?.length) continue;
+  const main = mainland(byName.get(f.properties.name) ?? f);
+  if (!main.coordinates?.length) continue;
+  mainlands[iso3] = {
+    type: "Polygon",
+    coordinates: main.coordinates.map((ring) =>
+      ring.map(([lon, lat]) => [Math.round(lon * 100) / 100, Math.round(lat * 100) / 100]),
+    ),
+  };
+}
+writeFileSync(
+  new URL("../src/data/mainlands.json", import.meta.url),
+  JSON.stringify(mainlands),
+);
 
 const names = new Set(countries.map((c) => c.name));
 if (names.size !== countries.length) throw new Error("Duplicate country names");

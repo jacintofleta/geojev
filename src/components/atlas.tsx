@@ -1,16 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { LocateResult } from "@/lib/countries";
+import { WORLD, WORLD_MAP, type LocateResult } from "@/lib/countries";
+import { scopeKey, type GeoMap, type Scope } from "@/lib/geo";
 import { formatPercent, heat, intensity } from "@/lib/heat";
-import { WorldMap } from "./world-map";
+import { MapView } from "./map-view";
 
 type Entry = {
   id: number;
   query: string;
+  scope: Scope;
   result?: LocateResult;
   error?: string;
 };
+
+type Loaded = { status: "loading" } | { status: "ready"; map: GeoMap } | { status: "error" };
 
 const SUGGESTIONS = [
   "Where was tango born?",
@@ -23,19 +27,34 @@ const SUGGESTIONS = [
 
 const RANKED_ROWS = 6;
 
+function countryById(id: string) {
+  return WORLD.countries.find((c) => c.name === id);
+}
+
+function levelsOf(iso3: string) {
+  return WORLD.countries.find((c) => c.iso3 === iso3)?.levels ?? [];
+}
+
 export function Atlas() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
+  const [scope, setScope] = useState<Scope>(null);
+  const [maps, setMaps] = useState<Record<string, Loaded>>({});
   const [input, setInput] = useState("");
   const nextId = useRef(0);
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const key = scopeKey(scope);
+  const loaded: Loaded = scope
+    ? (maps[key] ?? { status: "loading" })
+    : { status: "ready", map: WORLD_MAP };
   const pending = entries.some((e) => !e.result && !e.error);
-  const active = entries.find((e) => e.id === activeId)?.result;
-  const probabilities = new Map(
-    active?.ranked.map((r) => [r.name, r.probability]) ?? [],
-  );
+  const activeEntry = entries.find((e) => e.id === activeId);
+  // Only show an answer on the map it was asked about.
+  const active =
+    activeEntry && scopeKey(activeEntry.scope) === key ? activeEntry.result : undefined;
+  const probabilities = new Map(active?.ranked.map((r) => [r.id, r.probability]) ?? []);
 
   useEffect(() => {
     logRef.current?.scrollTo({
@@ -44,29 +63,42 @@ export function Atlas() {
     });
   }, [entries]);
 
-  async function ask(query: string) {
+  async function loadMap(next: Scope, force = false) {
+    if (!next) return;
+    const k = scopeKey(next);
+    if (!force && maps[k] && maps[k].status !== "error") return;
+    setMaps((prev) => ({ ...prev, [k]: { status: "loading" } }));
+    try {
+      const res = await fetch(`/api/regions/${next.iso3}/${next.level}`);
+      if (!res.ok) throw new Error();
+      const map: GeoMap = await res.json();
+      setMaps((prev) => ({ ...prev, [k]: { status: "ready", map } }));
+    } catch {
+      setMaps((prev) => ({ ...prev, [k]: { status: "error" } }));
+    }
+  }
+
+  async function ask(query: string, where: Scope = scope) {
     query = query.trim();
     if (!query || pending) return;
 
     const id = nextId.current++;
-    setEntries((prev) => [...prev, { id, query }]);
+    setEntries((prev) => [...prev, { id, query, scope: where }]);
+    setActiveId(id);
     setInput("");
 
     const update = (patch: Partial<Entry>) =>
-      setEntries((prev) =>
-        prev.map((e) => (e.id === id ? { ...e, ...patch } : e)),
-      );
+      setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
 
     try {
       const res = await fetch("/api/locate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, scope: where }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
       update({ result: data });
-      setActiveId(id);
     } catch (error) {
       update({
         error: error instanceof Error ? error.message : "Something went wrong.",
@@ -76,25 +108,80 @@ export function Atlas() {
     }
   }
 
+  /**
+   * Moves the map to the world or a country's regions. The question on screen
+   * follows you: it's re-asked there unless it has already been answered.
+   */
+  function goTo(next: Scope) {
+    setScope(next);
+    loadMap(next);
+    const query = activeEntry?.query;
+    if (!query || pending) return;
+    const existing = [...entries]
+      .reverse()
+      .find((e) => e.query === query && scopeKey(e.scope) === scopeKey(next) && !e.error);
+    if (existing) setActiveId(existing.id);
+    else ask(query, next);
+  }
+
+  function selectEntry(entry: Entry) {
+    setActiveId(entry.id);
+    setScope(entry.scope);
+    loadMap(entry.scope);
+  }
+
   return (
     <main className="relative flex h-dvh flex-col lg:block">
       {/* Map */}
       <section className="relative min-h-0 flex-1 lg:absolute lg:inset-0 lg:pl-[440px]">
-        <div className="flex h-full items-center justify-center px-4 pt-20 pb-4 lg:px-10 lg:pt-16 lg:pb-16">
-          <WorldMap probabilities={probabilities} answerKey={activeId} />
+        <div className="flex h-full items-center justify-center px-4 pt-28 pb-4 lg:px-10 lg:pt-32 lg:pb-16">
+          {loaded.status === "ready" ? (
+            <MapView
+              key={key}
+              map={loaded.map}
+              probabilities={probabilities}
+              answerKey={activeId}
+              label={
+                scope
+                  ? `Map of ${scope.country}'s regions shaded by likelihood`
+                  : "World map with countries shaded by likelihood"
+              }
+              {...(!scope && {
+                canSelect: (f) => (countryById(f.id)?.levels.length ?? 0) > 0,
+                onSelect: (f) => {
+                  const country = countryById(f.id);
+                  if (country?.iso3 && country.levels[0]) {
+                    goTo({
+                      iso3: country.iso3,
+                      country: country.name,
+                      level: country.levels[0].level,
+                    });
+                  }
+                },
+                selectHint: "Click to explore its regions",
+              })}
+            />
+          ) : (
+            <MapStatus
+              failed={loaded.status === "error"}
+              country={scope?.country ?? ""}
+              onRetry={() => loadMap(scope, true)}
+            />
+          )}
         </div>
 
         <header className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-6 px-5 pt-5 lg:pl-[472px] lg:pr-8 lg:pt-7">
-          <div className="lg:hidden">
-            <Wordmark />
-          </div>
-          <div className="hidden min-w-0 lg:block">
-            {active && (
+          <div className="min-w-0 space-y-2">
+            <div className="lg:hidden">
+              <Wordmark />
+            </div>
+            <ScopeBar scope={scope} onChange={goTo} />
+            {activeEntry && (
               <p
                 key={activeId}
-                className="rise truncate pr-3 font-serif text-3xl leading-tight text-ink italic"
+                className="rise hidden truncate pr-3 font-serif text-3xl leading-tight text-ink italic lg:block"
               >
-                “{active.query}”
+                “{activeEntry.query}”
               </p>
             )}
           </div>
@@ -108,19 +195,16 @@ export function Atlas() {
           <Wordmark />
         </div>
 
-        <div
-          ref={logRef}
-          className="min-h-0 flex-1 space-y-7 overflow-y-auto px-5 py-5 lg:px-7"
-        >
+        <div ref={logRef} className="min-h-0 flex-1 space-y-7 overflow-y-auto px-5 py-5 lg:px-7">
           {entries.length === 0 ? (
-            <Intro onPick={ask} />
+            <Intro onPick={(q) => ask(q)} />
           ) : (
             entries.map((entry) => (
               <EntryView
                 key={entry.id}
                 entry={entry}
                 active={entry.id === activeId}
-                onSelect={() => entry.result && setActiveId(entry.id)}
+                onSelect={() => entry.result && selectEntry(entry)}
               />
             ))
           )}
@@ -140,7 +224,9 @@ export function Atlas() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               maxLength={400}
-              placeholder="Ask about any place, food, idea…"
+              placeholder={
+                scope ? `Ask about ${scope.country}'s regions…` : "Ask about any place, food, idea…"
+              }
               aria-label="Ask Jev"
               className="min-w-0 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-muted"
             />
@@ -180,6 +266,74 @@ function Wordmark() {
   );
 }
 
+/** Where the map is: World › Country, plus the country's administrative levels. */
+function ScopeBar({ scope, onChange }: { scope: Scope; onChange: (scope: Scope) => void }) {
+  const pill = "rounded-full border px-2.5 py-1 whitespace-nowrap transition";
+  const idle =
+    "border-ink/12 bg-paper-raised/70 text-ink/70 hover:border-ember hover:text-ember-deep";
+  if (!scope) {
+    return (
+      <p className="font-mono text-[10px] tracking-wider text-muted uppercase">
+        World · click a country to explore its regions
+      </p>
+    );
+  }
+  return (
+    <nav className="pointer-events-auto flex flex-wrap items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase">
+      <button onClick={() => onChange(null)} className={`${pill} ${idle}`}>
+        ← World
+      </button>
+      <span className="px-1 text-ink">{scope.country}</span>
+      {levelsOf(scope.iso3).map(({ level, count }, i) =>
+        level === scope.level ? (
+          <span key={level} className={`${pill} border-ink bg-ink text-paper`}>
+            Level {i + 1} · {count}
+          </span>
+        ) : (
+          <button key={level} onClick={() => onChange({ ...scope, level })} className={`${pill} ${idle}`}>
+            Level {i + 1} · {count}
+          </button>
+        ),
+      )}
+    </nav>
+  );
+}
+
+function MapStatus({
+  failed,
+  country,
+  onRetry,
+}: {
+  failed: boolean;
+  country: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="w-64 space-y-3 text-center">
+      {failed ? (
+        <>
+          <p className="font-mono text-xs text-ember-deep">
+            Couldn&apos;t load {country}&apos;s regions.
+          </p>
+          <button
+            onClick={onRetry}
+            className="font-mono text-[11px] tracking-wider text-ink uppercase underline"
+          >
+            Try again
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="scan h-px w-full bg-hairline" />
+          <p className="font-mono text-[11px] tracking-wider text-muted uppercase">
+            Drawing {country}&apos;s regions…
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Intro({ onPick }: { onPick: (q: string) => void }) {
   return (
     <div className="rise space-y-6">
@@ -188,9 +342,8 @@ function Intro({ onPick }: { onPick: (q: string) => void }) {
         <span className="text-ember italic">most likely</span> points to.
       </p>
       <p className="text-sm leading-relaxed text-muted">
-        One request asks Jev a yes/no question about every country at once,
-        and each gets its own calibrated probability. No text generated, just
-        the map.
+        One request asks Jev a yes/no question about every country at once, and each gets its own
+        calibrated probability. Click a country to ask about its regions instead.
       </p>
       <div className="flex flex-wrap gap-2">
         {SUGGESTIONS.map((s) => (
@@ -216,26 +369,30 @@ function EntryView({
   active: boolean;
   onSelect: () => void;
 }) {
-  const { result, error } = entry;
+  const { result, error, scope } = entry;
+  const where = scope
+    ? `${scope.country} · level ${levelsOf(scope.iso3).findIndex((l) => l.level === scope.level) + 1}`
+    : null;
 
   return (
     <div className="rise">
-      <p className="font-serif text-[22px] leading-snug text-ink">
-        {entry.query}
-      </p>
+      {where && (
+        <p className="mb-1 font-mono text-[10px] tracking-wider text-ember-deep uppercase">
+          {where}
+        </p>
+      )}
+      <p className="font-serif text-[22px] leading-snug text-ink">{entry.query}</p>
 
       {!result && !error && (
         <div className="mt-3 space-y-2">
           <div className="scan h-px w-full bg-hairline" />
           <p className="font-mono text-[11px] tracking-wider text-muted uppercase">
-            Reading the world…
+            {scope ? `Reading ${scope.country}…` : "Reading the world…"}
           </p>
         </div>
       )}
 
-      {error && (
-        <p className="mt-2 font-mono text-xs text-ember-deep">{error}</p>
-      )}
+      {error && <p className="mt-2 font-mono text-xs text-ember-deep">{error}</p>}
 
       {result && (
         <button
@@ -249,35 +406,36 @@ function EntryView({
         >
           {result.matches === 0 && (
             <p className="mb-2 text-xs text-muted italic">
-              No country stands out for this one.
+              No {scope ? "region" : "country"} stands out for this one.
             </p>
           )}
           <ol className="space-y-1.5">
-            {result.ranked.slice(0, RANKED_ROWS).map((r, i) => {
-              return (
-                <li
-                  key={r.name}
-                  className="grid grid-cols-[1.25rem_8.5rem_1fr_3rem] items-center gap-2 font-mono text-xs"
+            {result.ranked.slice(0, RANKED_ROWS).map((r, i) => (
+              <li
+                key={r.id}
+                className="grid grid-cols-[1.25rem_8.5rem_1fr_3rem] items-center gap-2 font-mono text-xs"
+              >
+                <span className="text-muted">{String(i + 1).padStart(2, "0")}</span>
+                <span
+                  className="truncate text-ink"
+                  title={r.detail ? `${r.name}, ${r.detail}` : r.name}
                 >
-                  <span className="text-muted">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <span className="truncate text-ink">{r.name}</span>
-                  <span className="h-1.5 overflow-hidden rounded-full bg-ink/[0.06]">
-                    <span
-                      className="block h-full rounded-full transition-[width] duration-700"
-                      style={{
-                        width: `${Math.max(3, r.probability * 100)}%`,
-                        background: heat(Math.max(0.05, intensity(r.probability))),
-                      }}
-                    />
-                  </span>
-                  <span className="text-right text-ink tabular-nums">
-                    {formatPercent(r.probability)}
-                  </span>
-                </li>
-              );
-            })}
+                  {r.name}
+                </span>
+                <span className="h-1.5 overflow-hidden rounded-full bg-ink/[0.06]">
+                  <span
+                    className="block h-full rounded-full transition-[width] duration-700"
+                    style={{
+                      width: `${Math.max(3, r.probability * 100)}%`,
+                      background: heat(Math.max(0.05, intensity(r.probability))),
+                    }}
+                  />
+                </span>
+                <span className="text-right text-ink tabular-nums">
+                  {formatPercent(r.probability)}
+                </span>
+              </li>
+            ))}
           </ol>
           <p className="mt-3 flex gap-3 font-mono text-[10px] tracking-wider text-muted uppercase">
             <span>
@@ -305,7 +463,9 @@ function Legend({ result }: { result?: LocateResult }) {
         />
         <span>More likely</span>
       </div>
-      <div className="hidden sm:block">{result ? `${result.model} · ${result.latencyMs}ms` : "Jev · TypeSafe"}</div>
+      <div className="hidden sm:block">
+        {result ? `${result.model} · ${result.latencyMs}ms` : "Jev · TypeSafe"}
+      </div>
     </div>
   );
 }
