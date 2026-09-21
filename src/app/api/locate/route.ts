@@ -1,6 +1,7 @@
-import { APIError, TypeSafeClient, noul } from "@typesafe-ai/sdk";
+import { APIError, TypeSafeClient, noul, type Questions } from "@typesafe-ai/sdk";
 import { ipAddress } from "@vercel/functions";
 import { MATCH, WORLD_MAP, type LocateResult } from "@/lib/countries";
+import { emojiQuestion } from "@/lib/emoji";
 import { scopeKey, type GeoFeature } from "@/lib/geo";
 import { allowRequest, cacheAnswer, getCachedAnswer, reserveSpend } from "@/lib/guard";
 import { findLevel, getRegions } from "@/lib/regions";
@@ -40,12 +41,14 @@ async function scoreShapes(query: string, shapes: GeoFeature[], country: string 
     batches.push(shapes.slice(i, i + BATCH_SIZE));
   }
   const results = await Promise.all(
-    batches.map((batch) =>
-      client!.systemOne({
-        state: { query },
-        questions: Object.fromEntries(batch.map((s, i) => [`q${i}`, questionFor(s, country)])),
-      }),
-    ),
+    batches.map((batch, b) => {
+      const questions: Questions = Object.fromEntries(
+        batch.map((s, i) => [`q${i}`, questionFor(s, country)]),
+      );
+      // The emoji rides along with the first batch.
+      if (b === 0) questions.emoji = emojiQuestion;
+      return client!.systemOne({ state: { query }, questions });
+    }),
   );
   const scores = results.flatMap(({ answers }, b) =>
     batches[b].map((shape, i) => {
@@ -58,8 +61,14 @@ async function scoreShapes(query: string, shapes: GeoFeature[], country: string 
       };
     }),
   );
+  const emoji = results[0].answers.emoji;
   const inputTokens = results.reduce((sum, r) => sum + r.usage.input_tokens, 0);
-  return { scores, model: results[0].model, inputTokens };
+  return {
+    scores,
+    emoji: emoji?.type === "choice" ? emoji.choice : undefined,
+    model: results[0].model,
+    inputTokens,
+  };
 }
 
 export async function POST(request: Request) {
@@ -120,7 +129,7 @@ export async function POST(request: Request) {
     }
     settle = reservation;
 
-    const { scores, model, inputTokens } = await scoreShapes(
+    const { scores, emoji, model, inputTokens } = await scoreShapes(
       query,
       shapes,
       regions?.country ?? null,
@@ -134,6 +143,7 @@ export async function POST(request: Request) {
         .filter((c) => c.probability >= MIN_PROBABILITY)
         .sort((a, b) => b.probability - a.probability),
       matches: scores.filter((c) => c.probability >= MATCH).length,
+      emoji,
       model,
       latencyMs: Math.round(performance.now() - started),
     };

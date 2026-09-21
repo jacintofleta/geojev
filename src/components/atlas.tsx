@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { WORLD, WORLD_MAP, type LocateResult } from "@/lib/countries";
 import { scopeKey, type GeoMap, type Scope } from "@/lib/geo";
 import { formatPercent, heat, intensity } from "@/lib/heat";
+import { throwConfetti } from "./confetti";
 import { MapView } from "./map-view";
 
 type Entry = {
@@ -99,6 +100,7 @@ export function Atlas() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
       update({ result: data });
+      if (data.emoji) throwConfetti(data.emoji);
     } catch (error) {
       update({
         error: error instanceof Error ? error.message : "Something went wrong.",

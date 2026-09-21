@@ -58,7 +58,7 @@ export async function allowRequest(ip: string): Promise<boolean> {
 
 function cacheKey(query: string, scope: string): string {
   const normalized = query.toLowerCase().replace(/\s+/g, " ").trim();
-  return `answer:v1:${scope}:${normalized}`;
+  return `answer:v2:${scope}:${normalized}`;
 }
 
 export async function getCachedAnswer(query: string, scope: string) {
