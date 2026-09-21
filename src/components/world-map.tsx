@@ -1,15 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { WORLD, type Country } from "@/lib/countries";
-import { formatPercent, heat } from "@/lib/heat";
+import { MATCH, WORLD, type Country } from "@/lib/countries";
+import { formatPercent, heat, intensity as shade } from "@/lib/heat";
 
 // Countries smaller than this (projected px²) get a dot so they stay visible.
 const TINY_AREA = 6;
 const LABEL_COUNT = 3;
-const LABEL_MIN_PROBABILITY = 0.04;
-// Countries at least this share of the top answer decide where the map zooms.
-const FOCUS_MIN_INTENSITY = 0.3;
 const FOCUS_PADDING = 60;
 const MIN_FOCUS_WIDTH = 340;
 const ZOOM_MS = 1100;
@@ -127,19 +124,18 @@ export function WorldMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const rendered = useFittedSize(containerRef);
 
-  const max = Math.max(0, ...probabilities.values());
   const probability = (c: Country) => probabilities.get(c.name) ?? 0;
-  const intensity = (c: Country) => (max > 0 ? probability(c) / max : 0);
+  const intensity = (c: Country) => shade(probability(c));
 
   const box = useAnimatedBox(
-    focusBox(WORLD.countries.filter((c) => intensity(c) >= FOCUS_MIN_INTENSITY)),
+    focusBox(WORLD.countries.filter((c) => probability(c) >= MATCH)),
   );
   // Map units per screen pixel; keeps labels and markers a constant size at any zoom.
   const s = box.w / rendered.width;
   const zoomed = box.w < FULL.w - 1;
 
   const ranked = WORLD.countries
-    .filter((c) => probability(c) >= LABEL_MIN_PROBABILITY)
+    .filter((c) => probability(c) >= MATCH)
     .sort((a, b) => probability(b) - probability(a))
     .slice(0, LABEL_COUNT);
   const labels = placeLabels(ranked, (c) => `${c.name} ${formatPercent(probability(c))}`, s, box);
@@ -200,7 +196,7 @@ export function WorldMap({
             .filter((c) => c.area < TINY_AREA)
             .map((country) => {
               const t = intensity(country);
-              const lit = t > 0.02;
+              const lit = t > 0;
               return (
                 <circle
                   key={country.name}

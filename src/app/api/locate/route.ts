@@ -1,12 +1,22 @@
-import { APIError, TypeSafeClient, choice, noul } from "@typesafe-ai/sdk";
-import { COUNTRY_NAMES, type LocateResult } from "@/lib/countries";
+import { APIError, TypeSafeClient, noul } from "@typesafe-ai/sdk";
+import { COUNTRY_NAMES, MATCH, type LocateResult } from "@/lib/countries";
 
 const MAX_QUERY_LENGTH = 400;
 // Below this, a country is noise and not worth sending to the client.
-const MIN_PROBABILITY = 0.001;
+const MIN_PROBABILITY = 0.02;
 
-// One option per country; Jev returns a calibrated probability for each.
-const criteria = Object.fromEntries(COUNTRY_NAMES.map((name) => [name, null]));
+// One independent yes/no question per country, all answered in a single
+// request. Unlike a Choice, countries don't compete for one 100%, so twenty
+// countries can all score high.
+const questions = Object.fromEntries(
+  COUNTRY_NAMES.map((country, i) => [
+    `c${i}`,
+    noul({
+      country,
+      question: "Is `query` strongly associated with `country`?",
+    }),
+  ]),
+);
 
 let client: TypeSafeClient | undefined;
 
@@ -36,31 +46,20 @@ export async function POST(request: Request) {
   try {
     const { model, answers } = await client.systemOne({
       state: { query },
-      questions: {
-        country: choice(
-          "Which country does `query` point to? Pick the country the query is about, where it happens, or where its answer is located.",
-          criteria,
-        ),
-        geographic: noul(
-          "Does `query` point to a specific country or place in the world?",
-          {
-            true: "The query names, describes, or asks about something tied to a particular country or place.",
-            false: "The query has no connection to any particular place.",
-          },
-        ),
-      },
+      questions,
     });
 
-    const ranked = Object.entries(answers.country.probabilities as Record<string, number>)
-      .filter(([, probability]) => probability >= MIN_PROBABILITY)
-      .sort((a, b) => b[1] - a[1])
-      .map(([name, probability]) => ({ name, probability }));
+    const scored = COUNTRY_NAMES.map((name, i) => ({
+      name,
+      probability: answers[`c${i}`].noul,
+    }));
 
     const result: LocateResult = {
       query,
-      ranked,
-      confidence: answers.country.confidence,
-      geographic: answers.geographic.noul,
+      ranked: scored
+        .filter((c) => c.probability >= MIN_PROBABILITY)
+        .sort((a, b) => b.probability - a.probability),
+      matches: scored.filter((c) => c.probability >= MATCH).length,
       model,
       latencyMs: Math.round(performance.now() - started),
     };

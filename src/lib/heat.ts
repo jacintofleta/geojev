@@ -1,16 +1,19 @@
-/**
- * Maps a relative intensity (0–1, share of the top country's probability)
- * to a fill: land → ember → deep ember. The square root lifts the long
- * tail so runner-up countries stay visible next to a dominant answer.
- */
+// Probabilities under this stay unshaded; weak associations are mostly noise.
+const FLOOR = 0.2;
+
+/** Maps a country's probability (0–1) to a shading intensity (0–1). */
+export function intensity(p: number): number {
+  return Math.min(1, Math.max(0, (p - FLOOR) / (0.95 - FLOOR)));
+}
+
+/** Maps an intensity (0–1) to a fill: land → ember → deep ember. */
 export function heat(t: number): string {
-  if (t < 0.01) return "var(--land)";
-  const s = Math.sqrt(Math.min(1, t));
-  if (s < 0.6) {
-    const mix = Math.round(12 + (s / 0.6) * 88);
+  if (t <= 0) return "var(--land)";
+  if (t < 0.6) {
+    const mix = Math.round(12 + (t / 0.6) * 88);
     return `color-mix(in oklch, var(--ember) ${mix}%, var(--land))`;
   }
-  const mix = Math.round(((s - 0.6) / 0.4) * 75);
+  const mix = Math.round(((t - 0.6) / 0.4) * 75);
   return `color-mix(in oklch, var(--ember-deep) ${mix}%, var(--ember))`;
 }
 

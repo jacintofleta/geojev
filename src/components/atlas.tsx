@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { LocateResult } from "@/lib/countries";
-import { formatPercent, heat } from "@/lib/heat";
+import { formatPercent, heat, intensity } from "@/lib/heat";
 import { WorldMap } from "./world-map";
 
 type Entry = {
@@ -15,15 +15,13 @@ type Entry = {
 const SUGGESTIONS = [
   "Where was tango born?",
   "Best place to see the northern lights",
-  "Pierogi, borscht and vodka",
-  "Home of the kangaroo",
+  "Football",
+  "Where people speak Spanish",
   "Fjords and midnight sun",
-  "Where is the Atacama desert?",
+  "Pierogi, borscht and vodka",
 ];
 
 const RANKED_ROWS = 6;
-// Below this, Jev doesn't think the query is about a place at all.
-const LOW_GEOGRAPHIC = 0.35;
 
 export function Atlas() {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -190,8 +188,9 @@ function Intro({ onPick }: { onPick: (q: string) => void }) {
         <span className="text-ember italic">most likely</span> points to.
       </p>
       <p className="text-sm leading-relaxed text-muted">
-        One request, one calibrated probability per country, in milliseconds.
-        No text generated, just a distribution over the map.
+        One request asks Jev a yes/no question about every country at once,
+        and each gets its own calibrated probability. No text generated, just
+        the map.
       </p>
       <div className="flex flex-wrap gap-2">
         {SUGGESTIONS.map((s) => (
@@ -248,14 +247,13 @@ function EntryView({
               : "border-transparent opacity-55 hover:border-ink/10 hover:opacity-100"
           }`}
         >
-          {result.geographic < LOW_GEOGRAPHIC && (
+          {result.matches === 0 && (
             <p className="mb-2 text-xs text-muted italic">
-              Not much of a place in this one, so take the map loosely.
+              No country stands out for this one.
             </p>
           )}
           <ol className="space-y-1.5">
             {result.ranked.slice(0, RANKED_ROWS).map((r, i) => {
-              const t = r.probability / result.ranked[0].probability;
               return (
                 <li
                   key={r.name}
@@ -270,7 +268,7 @@ function EntryView({
                       className="block h-full rounded-full transition-[width] duration-700"
                       style={{
                         width: `${Math.max(3, r.probability * 100)}%`,
-                        background: heat(t),
+                        background: heat(Math.max(0.05, intensity(r.probability))),
                       }}
                     />
                   </span>
@@ -282,7 +280,9 @@ function EntryView({
             })}
           </ol>
           <p className="mt-3 flex gap-3 font-mono text-[10px] tracking-wider text-muted uppercase">
-            <span>conf {result.confidence.toFixed(2)}</span>
+            <span>
+              {result.matches} {result.matches === 1 ? "match" : "matches"}
+            </span>
             <span>{result.latencyMs}ms</span>
             <span className="truncate">{result.model}</span>
           </p>
