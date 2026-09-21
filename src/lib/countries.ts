@@ -22,6 +22,8 @@ export type LocateResult = {
   ranked: Ranked[];
   /** Shapes at or above MATCH. */
   matches: number;
+  /** The emoji Jev thinks best fits the question, thrown as confetti. */
+  emoji?: string;
   model: string;
   latencyMs: number;
   /** Served from the shared answer cache instead of a fresh Jev call. */
