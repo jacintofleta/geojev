@@ -153,6 +153,16 @@ export function Atlas() {
     loadMap(entry.scope);
   }
 
+  /** Drops an answer; if it was on the map, the latest remaining one takes its place. */
+  function removeEntry(entry: Entry) {
+    const rest = entries.filter((e) => e.id !== entry.id);
+    setEntries(rest);
+    if (entry.id !== activeId) return;
+    const latest = rest.findLast((e) => e.answers);
+    if (latest) selectEntry(latest);
+    else setActiveId(null);
+  }
+
   return (
     <main className="relative flex h-dvh flex-col lg:block">
       {/* Map */}
@@ -229,6 +239,7 @@ export function Atlas() {
                 entry={entry}
                 active={entry.id === activeId}
                 onSelect={() => entry.answers && selectEntry(entry)}
+                onRemove={() => removeEntry(entry)}
               />
             ))
           )}
@@ -412,10 +423,12 @@ function EntryView({
   entry,
   active,
   onSelect,
+  onRemove,
 }: {
   entry: Entry;
   active: boolean;
   onSelect: () => void;
+  onRemove: () => void;
 }) {
   const { answers, error, scope } = entry;
   const where = scope
@@ -445,30 +458,47 @@ function EntryView({
       {error && <p className="mt-2 font-mono text-xs text-ember-deep">{error}</p>}
 
       {answers && (
-        <button
-          onClick={onSelect}
-          aria-pressed={active}
-          className={`mt-3 block w-full rounded-2xl border p-3 text-left transition ${
-            active
-              ? "border-ink/15 bg-paper"
-              : "border-transparent opacity-55 hover:border-ink/10 hover:opacity-100"
-          }`}
-        >
-          {answers.length === 2 ? (
-            <VersusList a={answers[0]} b={answers[1]} shapes={scope ? "regions" : "countries"} />
-          ) : (
-            <RankedList result={answers[0]} shape={scope ? "region" : "country"} />
-          )}
-          <p className="mt-3 flex gap-3 font-mono text-[10px] tracking-wider text-muted uppercase">
-            {answers.length === 1 && (
-              <span>
-                {answers[0].matches} {answers[0].matches === 1 ? "match" : "matches"}
-              </span>
+        <div className="group relative mt-3">
+          <button
+            onClick={onSelect}
+            aria-pressed={active}
+            className={`block w-full rounded-2xl border p-3 text-left transition ${
+              active
+                ? "border-ink/15 bg-paper"
+                : "border-transparent opacity-55 hover:border-ink/10 hover:opacity-100"
+            }`}
+          >
+            {answers.length === 2 ? (
+              <VersusList a={answers[0]} b={answers[1]} shapes={scope ? "regions" : "countries"} />
+            ) : (
+              <RankedList result={answers[0]} shape={scope ? "region" : "country"} />
             )}
-            <span>{timing(answers)}</span>
-            <span className="truncate">{answers[0].model}</span>
-          </p>
-        </button>
+            <p className="mt-3 flex gap-3 font-mono text-[10px] tracking-wider text-muted uppercase">
+              {answers.length === 1 && (
+                <span>
+                  {answers[0].matches} {answers[0].matches === 1 ? "match" : "matches"}
+                </span>
+              )}
+              <span>{timing(answers)}</span>
+              <span className="truncate">{answers[0].model}</span>
+            </p>
+          </button>
+          <button
+            onClick={onRemove}
+            aria-label={`Remove “${entry.query}”`}
+            title="Remove"
+            className="absolute -top-2 -right-2 grid size-5 place-items-center rounded-full border border-ink/15 bg-paper text-ink/60 opacity-0 shadow-sm transition group-hover:opacity-100 hover:border-ember hover:text-ember-deep focus-visible:opacity-100 pointer-coarse:opacity-100"
+          >
+            <svg viewBox="0 0 16 16" className="size-2.5" fill="none" aria-hidden>
+              <path
+                d="M4 4l8 8M12 4l-8 8"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </div>
       )}
     </div>
   );
