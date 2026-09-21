@@ -19,13 +19,13 @@ type Entry = {
 type Loaded = { status: "loading" } | { status: "ready"; map: GeoMap } | { status: "error" };
 
 const SUGGESTIONS = [
-  "Where was tango born?",
-  "Best place to see the northern lights",
-  "Football",
-  "Tea vs coffee",
   "Where people speak Spanish",
-  "Fjords and midnight sun",
-  "Pierogi, borscht and vodka",
+  "Countries that drive on the left",
+  "Kingdoms with a reigning monarch",
+  "Best places to see the northern lights",
+  "Where coffee is grown",
+  "Tea vs coffee",
+  "Former Soviet republics",
 ];
 
 const RANKED_ROWS = 6;
@@ -241,6 +241,10 @@ export function Atlas() {
             ask(input);
           }}
         >
+          <p className="px-5 pb-2 text-[12px] text-muted">
+            Tip: compare two things with <span className="text-ember">tea</span>{" "}
+            <span className="text-ink">vs</span> <span className="text-tide">coffee</span>
+          </p>
           <div className="flex items-center gap-2 rounded-full border border-ink/15 bg-paper py-1.5 pr-1.5 pl-5 transition focus-within:border-ink/40 focus-within:bg-white/60">
             <input
               ref={inputRef}
@@ -376,11 +380,6 @@ function Intro({ onPick }: { onPick: (q: string) => void }) {
       <p className="font-serif text-[26px] leading-[1.15] text-ink">
         Type anything. Jev reads it and lights up the countries it{" "}
         <span className="text-ember italic">most likely</span> points to.
-      </p>
-      <p className="text-sm leading-relaxed text-muted">
-        One request asks Jev a yes/no question about every country at once, and each gets its own
-        calibrated probability. Put <span className="text-ink">vs</span> between two things to
-        compare them on one map. Click a country to ask about its regions instead.
       </p>
       <div className="flex flex-wrap gap-2">
         {SUGGESTIONS.map((s) => (
