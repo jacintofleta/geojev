@@ -81,7 +81,7 @@ export function Atlas() {
       {/* Map */}
       <section className="relative min-h-0 flex-1 lg:absolute lg:inset-0 lg:pl-[440px]">
         <div className="flex h-full items-center justify-center px-4 pt-20 pb-4 lg:px-10 lg:pt-16 lg:pb-16">
-          <WorldMap probabilities={probabilities} />
+          <WorldMap probabilities={probabilities} answerKey={activeId} />
         </div>
 
         <header className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-6 px-5 pt-5 lg:pl-[472px] lg:pr-8 lg:pt-7">
