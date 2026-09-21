@@ -14,6 +14,11 @@ const MIN_FOCUS_WIDTH = 0.34;
 // Narrowest view, as a share of the home width (about 16x zoom).
 const MIN_VIEW_WIDTH = 1 / 16;
 const ZOOM_MS = 1100;
+// Reveal: shapes light up in a wave from the top match, starting mid-flight.
+const IGNITE_DELAY_MS = 380;
+const RIPPLE_MS = 900;
+// Most shapes that get the ignite flash, to keep huge answers cheap.
+const FLASH_COUNT = 16;
 // Pointer travel (px) below which a press counts as a click, not a drag.
 const TAP_SLOP = 5;
 
@@ -82,6 +87,13 @@ function focusBox(features: GeoFeature[], frame: Frame): Box {
   else w = h * frame.aspect;
   if (w >= frame.full.w) return frame.full;
   return clampBox({ x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - h / 2, w, h }, frame);
+}
+
+/** Delay (ms) before a shape lights up: further from the epicenter, later. */
+function igniteDelay(feature: GeoFeature, epicenter: GeoFeature | undefined, frame: Frame) {
+  if (!epicenter) return 0;
+  const distance = Math.hypot(feature.cx - epicenter.cx, feature.cy - epicenter.cy);
+  return Math.round(IGNITE_DELAY_MS + Math.min(1, distance / frame.home.w) * RIPPLE_MS);
 }
 
 /** Largest map-aspect size that fits the container. */
@@ -330,10 +342,14 @@ export function MapView({
   const intensity = (f: GeoFeature) => shade(probability(f));
   const selectable = (f: GeoFeature) => !!onSelect && (canSelect?.(f) ?? true);
 
-  const view = useViewBox(
-    focusBox(map.features.filter((f) => probability(f) >= MATCH), frame),
-    answerKey,
-  );
+  const matches = map.features
+    .filter((f) => probability(f) >= MATCH)
+    .sort((a, b) => probability(b) - probability(a));
+  const epicenter = matches[0];
+  const delay = (f: GeoFeature) =>
+    ({ "--d": `${igniteDelay(f, epicenter, frame)}ms` }) as React.CSSProperties;
+
+  const view = useViewBox(focusBox(matches, frame), answerKey);
   const { box } = view;
   const gestures = useGestures(svgRef, view, frame, {
     onStart: () => setHover(null),
@@ -350,10 +366,7 @@ export function MapView({
     Math.abs(box.x - frame.home.x) < 1 &&
     Math.abs(box.y - frame.home.y) < 1;
 
-  const ranked = map.features
-    .filter((f) => probability(f) >= MATCH && inView(f, box))
-    .sort((a, b) => probability(b) - probability(a))
-    .slice(0, LABEL_COUNT);
+  const ranked = matches.filter((f) => inView(f, box)).slice(0, LABEL_COUNT);
   const labels = placeLabels(ranked, (f) => `${f.name} ${formatPercent(probability(f))}`, s, box);
 
   const onHover = (feature: GeoFeature) => (event: React.PointerEvent) => {
@@ -363,6 +376,7 @@ export function MapView({
   const shapeProps = (feature: GeoFeature) => ({
     "data-id": feature.id,
     className: `country ${selectable(feature) && !gestures.dragging ? "cursor-pointer" : ""}`,
+    style: delay(feature),
     onPointerMove: onHover(feature),
   });
 
@@ -382,16 +396,19 @@ export function MapView({
         aria-label={label}
         onPointerLeave={() => setHover(null)}
       >
-        {map.sphere && (
-          <>
-            <defs>
-              <clipPath id="sphere">
-                <path d={map.sphere} />
-              </clipPath>
-            </defs>
-            <path d={map.sphere} fill="var(--paper-raised)" />
-          </>
-        )}
+        <defs>
+          {map.sphere && (
+            <clipPath id="sphere">
+              <path d={map.sphere} />
+            </clipPath>
+          )}
+          <radialGradient id="flare">
+            <stop offset="0%" stopColor="var(--ember)" stopOpacity={0.55} />
+            <stop offset="45%" stopColor="var(--ember)" stopOpacity={0.18} />
+            <stop offset="100%" stopColor="var(--ember)" stopOpacity={0} />
+          </radialGradient>
+        </defs>
+        {map.sphere && <path d={map.sphere} fill="var(--paper-raised)" />}
         {map.graticule && (
           <path
             d={map.graticule}
@@ -444,6 +461,44 @@ export function MapView({
             })}
         </g>
 
+        {/* One-shot reveal, replayed whenever a new answer lands. */}
+        {epicenter && (
+          <g key={`${String(answerKey)}-${epicenter.id}`} className="pointer-events-none">
+            <circle
+              cx={epicenter.cx}
+              cy={epicenter.cy}
+              r={60 * s}
+              fill="url(#flare)"
+              className="flare"
+              style={delay(epicenter)}
+            />
+            {matches.slice(0, FLASH_COUNT).map((feature) => (
+              <path
+                key={feature.id}
+                d={feature.d}
+                className="ignite"
+                style={delay(feature)}
+                strokeLinejoin="round"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+            {[0, 220].map((lag, i) => (
+              <circle
+                key={lag}
+                cx={epicenter.cx}
+                cy={epicenter.cy}
+                r={6 * s}
+                fill="none"
+                stroke={i === 0 ? "var(--ember)" : "var(--ember-deep)"}
+                strokeWidth={i === 0 ? 2 : 1}
+                vectorEffect="non-scaling-stroke"
+                className="shockwave"
+                style={{ "--d": `${IGNITE_DELAY_MS + lag}ms` } as React.CSSProperties}
+              />
+            ))}
+          </g>
+        )}
+
         {map.sphere && (
           <path
             d={map.sphere}
@@ -458,7 +513,13 @@ export function MapView({
 
         <g className="pointer-events-none">
           {labels.map(({ feature, x, y, width }, rank) => (
-            <g key={`${feature.id}-${rank}`}>
+            <g
+              key={`${String(answerKey)}-${feature.id}-${rank}`}
+              className="label-in"
+              style={
+                { "--d": `${igniteDelay(feature, epicenter, frame) + 250}ms` } as React.CSSProperties
+              }
+            >
               {rank === 0 && (
                 <circle
                   cx={feature.cx}
