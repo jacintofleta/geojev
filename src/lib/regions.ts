@@ -3,6 +3,7 @@ import "server-only";
 import {
   geoArea,
   geoAzimuthalEqualArea,
+  geoBounds,
   geoCentroid,
   geoContains,
   geoPath,
@@ -26,6 +27,7 @@ import {
   simplify,
 } from "topojson-simplify";
 import mainlands from "@/data/mainlands.json";
+import { trimRegion } from "@/lib/borders";
 import { WORLD } from "@/lib/countries";
 import type { GeoFeature, GeoMap } from "@/lib/geo";
 
@@ -35,6 +37,9 @@ const WIDTH = 1000;
 const MAX_POINTS = 20_000;
 // Islands smaller than this share of the country's total area are dropped.
 const MIN_RING_SHARE = 2e-5;
+// Regions this close to the mainland (as a share of its size) frame the view
+// too, so Ceuta, Melilla and the Balearics show up in Spain.
+const NEAR_MAINLAND = 0.1;
 
 type Shape = Feature<Polygon | MultiPolygon, { shapeName?: string }>;
 
@@ -80,7 +85,22 @@ async function fetchBoundaries(iso3: string, level: string): Promise<Shape[]> {
       (f): f is Shape =>
         f.geometry?.type === "Polygon" || f.geometry?.type === "MultiPolygon",
     )
-    .map(rewind);
+    .flatMap((f) => {
+      const trimmed = trimRegion(iso3, f.properties?.shapeName, f.geometry);
+      if (!trimmed) return [];
+      const { name: shapeName, geometry } = trimmed;
+      return [rewind({ ...f, geometry, properties: { ...f.properties, shapeName } })];
+    });
+}
+
+/** Whether a point is on the mainland or just off it. */
+function nearMainland(mainland: Polygon, [lon, lat]: [number, number]) {
+  if (geoContains(mainland, [lon, lat])) return true;
+  const [[x0, y0], [x1, y1]] = geoBounds(mainland);
+  // Mainlands that cross the antimeridian only count what's on them.
+  if (x0 > x1) return false;
+  const pad = Math.max(x1 - x0, y1 - y0) * NEAR_MAINLAND;
+  return lon >= x0 - pad && lon <= x1 + pad && lat >= y0 - pad && lat <= y1 + pad;
 }
 
 /**
@@ -142,11 +162,11 @@ async function buildRegions(iso3: string, level: string): Promise<RegionMap> {
     level === "ADM1" ? Promise.resolve([]) : getRegionsRaw(iso3, "ADM1"),
   ]);
 
-  // Frame the view on regions that sit on the mainland; the rest stay reachable by panning.
+  // Frame the view on regions on or near the mainland; the rest stay reachable by panning.
   const mainland = (mainlands as Record<string, Polygon>)[iso3];
   const centers = shapes.map((s) => geoCentroid(largestPart(s)));
   const onMainland = mainland
-    ? shapes.filter((_, i) => geoContains(mainland, centers[i]))
+    ? shapes.filter((_, i) => nearMainland(mainland, centers[i]))
     : [];
   const frame = onMainland.length > 0 ? onMainland : shapes;
   const frameCollection = { type: "FeatureCollection" as const, features: frame };

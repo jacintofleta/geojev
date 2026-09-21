@@ -7,6 +7,7 @@ import { feature } from "topojson-client";
 import { presimplify, simplify, quantile } from "topojson-simplify";
 import { geoEqualEarth, geoPath, geoGraticule10 } from "d3-geo";
 import isoCountries from "i18n-iso-countries";
+import { SOUTH_LIMITS, keepNorthOf, trimRegion } from "../src/lib/borders.ts";
 
 const require = createRequire(import.meta.url);
 const topo = require("world-atlas/countries-50m.json");
@@ -80,7 +81,8 @@ async function fetchLevels() {
   for (const level of ["ADM1", "ADM2", "ADM3", "ADM4", "ADM5"]) {
     const res = await fetch(`https://www.geoboundaries.org/api/current/gbOpen/ALL/${level}/`);
     for (const b of await res.json()) {
-      const count = Number(b.admUnitCount);
+      const count =
+        b.boundaryISO in SOUTH_LIMITS ? await countClipped(b) : Number(b.admUnitCount);
       const list = (levels[b.boundaryISO] ??= []);
       if (count < 2 || count > MAX_REGIONS) continue;
       if (list.some((l) => l.count === count)) continue;
@@ -90,18 +92,34 @@ async function fetchLevels() {
   return levels;
 }
 
+/** Counts the regions left once src/lib/regions.ts trims them to SOUTH_LIMITS. */
+async function countClipped(boundary) {
+  const res = await fetch(boundary.simplifiedGeometryGeoJSON);
+  const { features } = await res.json();
+  return features.filter((f) => {
+    if (f.geometry?.type !== "Polygon" && f.geometry?.type !== "MultiPolygon") return false;
+    return trimRegion(boundary.boundaryISO, f.properties?.shapeName, f.geometry) !== null;
+  }).length;
+}
+
 const levels = await fetchLevels();
 
 let simplified = presimplify(topo);
 simplified = simplify(simplified, quantile(simplified, 0.1));
 
-const original = feature(topo, topo.objects.countries).features.filter(
-  (f) => !EXCLUDE.has(f.properties.name),
-);
+/** Trims countries whose Natural Earth shape overlaps a territory drawn on its own. */
+function clip(f) {
+  const limit = SOUTH_LIMITS[isoCountries.numericToAlpha3(f.id)];
+  return limit ? { ...f, geometry: keepNorthOf(f.geometry, limit.lat) } : f;
+}
+
+const original = feature(topo, topo.objects.countries)
+  .features.filter((f) => !EXCLUDE.has(f.properties.name))
+  .map(clip);
 const byName = new Map(
   feature(simplified, simplified.objects.countries).features.map((f) => [
     f.properties.name,
-    f,
+    clip(f),
   ]),
 );
 
