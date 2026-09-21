@@ -24,4 +24,6 @@ export type LocateResult = {
   matches: number;
   model: string;
   latencyMs: number;
+  /** Served from the shared answer cache instead of a fresh Jev call. */
+  cached?: boolean;
 };

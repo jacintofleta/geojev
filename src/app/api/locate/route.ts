@@ -1,6 +1,8 @@
 import { APIError, TypeSafeClient, noul } from "@typesafe-ai/sdk";
+import { ipAddress } from "@vercel/functions";
 import { MATCH, WORLD_MAP, type LocateResult } from "@/lib/countries";
-import type { GeoFeature } from "@/lib/geo";
+import { scopeKey, type GeoFeature } from "@/lib/geo";
+import { allowRequest, cacheAnswer, getCachedAnswer, reserveSpend } from "@/lib/guard";
 import { findLevel, getRegions } from "@/lib/regions";
 
 const MAX_QUERY_LENGTH = 400;
@@ -8,6 +10,8 @@ const MAX_QUERY_LENGTH = 400;
 const MIN_PROBABILITY = 0.02;
 // Questions per Jev request; bigger levels are split into parallel requests.
 const BATCH_SIZE = 400;
+// Generous per-question token estimate, used to reserve budget before calling Jev.
+const TOKENS_PER_QUESTION = 45;
 
 let client: TypeSafeClient | undefined;
 
@@ -54,7 +58,8 @@ async function scoreShapes(query: string, shapes: GeoFeature[], country: string 
       };
     }),
   );
-  return { scores, model: results[0].model };
+  const inputTokens = results.reduce((sum, r) => sum + r.usage.input_tokens, 0);
+  return { scores, model: results[0].model, inputTokens };
 }
 
 export async function POST(request: Request) {
@@ -81,16 +86,47 @@ export async function POST(request: Request) {
     );
   }
 
+  const ip = ipAddress(request) ?? request.headers.get("x-forwarded-for")?.split(",")[0] ?? "anon";
+  if (!(await allowRequest(ip))) {
+    return Response.json(
+      { error: "That's a lot of questions. Take a breather and try again in a minute." },
+      { status: 429 },
+    );
+  }
+
+  const where = scopeKey(scope ? { iso3: scope.iso3, country: "", level: scope.level } : null);
+  const cached = await getCachedAnswer(query, where);
+  if (cached) return Response.json({ ...cached, cached: true });
+
   client ??= new TypeSafeClient();
   const started = performance.now();
+  let settle: ((tokens: number) => Promise<void>) | null = null;
 
   try {
     const regions = scope ? await getRegions(scope.iso3, scope.level) : null;
-    const { scores, model } = await scoreShapes(
+    const shapes = regions?.features ?? WORLD_MAP.features;
+
+    const reservation = await reserveSpend(shapes.length * TOKENS_PER_QUESTION + query.length);
+    if (reservation === "spent" || reservation === "unavailable") {
+      return Response.json(
+        {
+          error:
+            reservation === "spent"
+              ? "Geojev has used up today's Jev budget. Come back tomorrow!"
+              : "Geojev is taking a short break. Try again in a moment.",
+        },
+        { status: 503 },
+      );
+    }
+    settle = reservation;
+
+    const { scores, model, inputTokens } = await scoreShapes(
       query,
-      regions?.features ?? WORLD_MAP.features,
+      shapes,
       regions?.country ?? null,
     );
+    await settle(inputTokens);
+    settle = null;
 
     const result: LocateResult = {
       query,
@@ -101,8 +137,11 @@ export async function POST(request: Request) {
       model,
       latencyMs: Math.round(performance.now() - started),
     };
+    await cacheAnswer(query, where, result);
     return Response.json(result);
   } catch (error) {
+    // Release the reservation; failed requests aren't billed.
+    await settle?.(0);
     const status = error instanceof APIError ? error.status : 502;
     const message =
       status === 429 || status === 529

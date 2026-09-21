@@ -441,7 +441,7 @@ function EntryView({
             <span>
               {result.matches} {result.matches === 1 ? "match" : "matches"}
             </span>
-            <span>{result.latencyMs}ms</span>
+            <span>{result.cached ? "cached" : `${result.latencyMs}ms`}</span>
             <span className="truncate">{result.model}</span>
           </p>
         </button>
@@ -464,7 +464,9 @@ function Legend({ result }: { result?: LocateResult }) {
         <span>More likely</span>
       </div>
       <div className="hidden sm:block">
-        {result ? `${result.model} · ${result.latencyMs}ms` : "Jev · TypeSafe"}
+        {result
+          ? `${result.model} · ${result.cached ? "cached" : `${result.latencyMs}ms`}`
+          : "Jev · TypeSafe"}
       </div>
     </div>
   );
