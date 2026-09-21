@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { MATCH, WORLD, WORLD_MAP, type LocateResult } from "@/lib/countries";
 import { scopeKey, type GeoMap, type Scope } from "@/lib/geo";
 import { formatPercent, heat, intensity, versusHeat, type Hue } from "@/lib/heat";
+import { throwConfetti } from "./confetti";
 import { MapView } from "./map-view";
 
 type Entry = {
@@ -119,6 +120,8 @@ export function Atlas() {
     try {
       const answers = await Promise.all(sidesOf(query).map((side) => locate(side, where)));
       update({ answers });
+      // A "vs" throws both sides' emoji (once, if they picked the same one).
+      for (const emoji of new Set(answers.map((a) => a.emoji))) if (emoji) throwConfetti(emoji);
     } catch (error) {
       update({
         error: error instanceof Error ? error.message : "Something went wrong.",
