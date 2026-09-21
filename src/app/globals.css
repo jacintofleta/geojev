@@ -118,7 +118,7 @@ body::after {
 /* Soft edges when zoomed in, so the crop doesn't read as a hard box. */
 .map-fade {
   mask-image:
-    linear-gradient(to right, transparent, #000 7%, #000 93%, transparent),
-    linear-gradient(to bottom, transparent, #000 14%, #000 86%, transparent);
+    linear-gradient(to right, transparent, #000 20px, #000 calc(100% - 20px), transparent),
+    linear-gradient(to bottom, transparent, #000 20px, #000 calc(100% - 20px), transparent);
   mask-composite: intersect;
 }
