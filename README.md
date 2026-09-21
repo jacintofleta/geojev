@@ -8,6 +8,9 @@ one [Noul](https://docs.typesafe.ai/primitives/noul) (yes/no) question per count
 dozens of countries, while "sushi" lights up Japan. The map shades countries by probability and zooms to the matches
 (countries at 50% or more).
 
+Put `vs` between two things ("tea vs coffee") to compare them on one map. Each side is asked separately (and cached
+separately), then the map blends them: ember for the first, blue for the second, purple where both are strong.
+
 Click a country to ask about its regions instead. Boundaries come from
 [geoBoundaries](https://www.geoboundaries.org) (open license, up to five administrative levels per country). The server
 fetches a level on first use, simplifies and projects it, and serves it with long CDN caching. Levels with more than

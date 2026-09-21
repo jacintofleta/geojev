@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MATCH } from "@/lib/countries";
 import type { GeoFeature, GeoMap } from "@/lib/geo";
-import { formatPercent, heat, intensity as shade } from "@/lib/heat";
+import { formatPercent, heat, intensity, versusHeat, type Hue } from "@/lib/heat";
 
 // Shapes smaller than this (map units²) get a dot so they stay visible.
 const TINY_AREA = 6;
@@ -315,6 +315,7 @@ function placeLabels(
 export function MapView({
   map,
   probabilities,
+  versus,
   answerKey,
   label,
   canSelect,
@@ -324,6 +325,8 @@ export function MapView({
   map: GeoMap;
   /** Probability per feature id. */
   probabilities: Map<string, number>;
+  /** A rival answer's probabilities ("tea vs coffee"), compared on the same map in its own hue. */
+  versus?: Map<string, number>;
   /** Changes whenever a different answer is shown, to re-frame the map. */
   answerKey: unknown;
   label: string;
@@ -338,14 +341,23 @@ export function MapView({
   const [frame] = useState(() => frameOf(map));
   const rendered = useFittedSize(containerRef, frame.aspect);
 
-  const probability = (f: GeoFeature) => probabilities.get(f.id) ?? 0;
-  const intensity = (f: GeoFeature) => shade(probability(f));
+  const first = (f: GeoFeature) => probabilities.get(f.id) ?? 0;
+  const second = (f: GeoFeature) => versus?.get(f.id) ?? 0;
+  // The stronger side decides framing, labels and whether a shape is lit.
+  const probability = (f: GeoFeature) => Math.max(first(f), second(f));
+  const lit = (f: GeoFeature) => intensity(probability(f)) > 0;
+  const fill = (f: GeoFeature) =>
+    versus ? versusHeat(first(f), second(f)) : heat(intensity(first(f)));
+  // The hue of whichever side leads, for labels and the reveal.
+  const lead = (f: GeoFeature): Hue => (second(f) > first(f) ? "tide" : "ember");
+  const leadColor = (f: GeoFeature) => `var(--${lead(f)}-deep)`;
   const selectable = (f: GeoFeature) => !!onSelect && (canSelect?.(f) ?? true);
 
   const matches = map.features
     .filter((f) => probability(f) >= MATCH)
     .sort((a, b) => probability(b) - probability(a));
   const epicenter = matches[0];
+  const epicenterHue = epicenter ? lead(epicenter) : "ember";
   const delay = (f: GeoFeature) =>
     ({ "--d": `${igniteDelay(f, epicenter, frame)}ms` }) as React.CSSProperties;
 
@@ -403,9 +415,9 @@ export function MapView({
             </clipPath>
           )}
           <radialGradient id="flare">
-            <stop offset="0%" stopColor="var(--ember)" stopOpacity={0.55} />
-            <stop offset="45%" stopColor="var(--ember)" stopOpacity={0.18} />
-            <stop offset="100%" stopColor="var(--ember)" stopOpacity={0} />
+            <stop offset="0%" stopColor={`var(--${epicenterHue})`} stopOpacity={0.55} />
+            <stop offset="45%" stopColor={`var(--${epicenterHue})`} stopOpacity={0.18} />
+            <stop offset="100%" stopColor={`var(--${epicenterHue})`} stopOpacity={0} />
           </radialGradient>
         </defs>
         {map.sphere && <path d={map.sphere} fill="var(--paper-raised)" />}
@@ -429,7 +441,7 @@ export function MapView({
                 key={feature.id}
                 d={feature.d}
                 {...shapeProps(feature)}
-                fill={heat(intensity(feature))}
+                fill={fill(feature)}
                 stroke={isHovered ? "var(--ink)" : "var(--paper-raised)"}
                 strokeWidth={isHovered ? 1.2 : 0.6}
                 strokeLinejoin="round"
@@ -443,16 +455,15 @@ export function MapView({
           {map.features
             .filter((f) => f.area < TINY_AREA)
             .map((feature) => {
-              const t = intensity(feature);
-              const lit = t > 0;
+              const on = lit(feature);
               return (
                 <circle
                   key={feature.id}
                   cx={feature.cx}
                   cy={feature.cy}
-                  r={(lit ? 3.5 : 1.6) * s}
+                  r={(on ? 3.5 : 1.6) * s}
                   {...shapeProps(feature)}
-                  fill={lit ? heat(t) : "var(--land)"}
+                  fill={fill(feature)}
                   stroke="var(--paper-raised)"
                   strokeWidth={0.6}
                   vectorEffect="non-scaling-stroke"
@@ -477,7 +488,7 @@ export function MapView({
                 key={feature.id}
                 d={feature.d}
                 className="ignite"
-                style={delay(feature)}
+                style={{ ...delay(feature), "--flash": `var(--${lead(feature)})` } as React.CSSProperties}
                 strokeLinejoin="round"
                 vectorEffect="non-scaling-stroke"
               />
@@ -489,7 +500,7 @@ export function MapView({
                 cy={epicenter.cy}
                 r={6 * s}
                 fill="none"
-                stroke={i === 0 ? "var(--ember)" : "var(--ember-deep)"}
+                stroke={`var(--${epicenterHue}${i === 0 ? "" : "-deep"})`}
                 strokeWidth={i === 0 ? 2 : 1}
                 vectorEffect="non-scaling-stroke"
                 className="shockwave"
@@ -526,7 +537,7 @@ export function MapView({
                   cy={feature.cy}
                   r={5 * s}
                   fill="none"
-                  stroke="var(--ember-deep)"
+                  stroke={leadColor(feature)}
                   strokeWidth={1}
                   vectorEffect="non-scaling-stroke"
                   className="pulse"
@@ -562,7 +573,7 @@ export function MapView({
                 fill="var(--ink)"
               >
                 {feature.name}{" "}
-                <tspan fill="var(--ember-deep)">{formatPercent(probability(feature))}</tspan>
+                <tspan fill={leadColor(feature)}>{formatPercent(probability(feature))}</tspan>
               </text>
             </g>
           ))}
@@ -594,10 +605,18 @@ export function MapView({
           {hover.feature.detail && hover.feature.detail !== hover.feature.name && (
             <span className="text-muted">, {hover.feature.detail}</span>
           )}
-          {probabilities.size > 0 && (
-            <span className="ml-2 text-ember-deep">
-              {formatPercent(probability(hover.feature))}
+          {versus ? (
+            <span className="ml-2">
+              <span className="text-ember-deep">{formatPercent(first(hover.feature))}</span>
+              <span className="text-muted"> vs </span>
+              <span className="text-tide-deep">{formatPercent(second(hover.feature))}</span>
             </span>
+          ) : (
+            probabilities.size > 0 && (
+              <span className="ml-2 text-ember-deep">
+                {formatPercent(first(hover.feature))}
+              </span>
+            )
           )}
           {selectHint && selectable(hover.feature) && (
             <span className="block text-[10px] tracking-wider text-muted uppercase">
