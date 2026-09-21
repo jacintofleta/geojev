@@ -12,8 +12,21 @@ import type { LocateResult } from "@/lib/countries";
 
 /** Jev's price per input token, in USD ($0.042 per million; output is free). */
 const USD_PER_INPUT_TOKEN = 0.042 / 1_000_000;
-const DAILY_BUDGET_USD = Number(process.env.DAILY_BUDGET_USD ?? 10);
+const DAILY_BUDGET_USD = parseBudget(process.env.DAILY_BUDGET_USD);
 const CACHE_SECONDS = 60 * 60 * 24;
+
+/**
+ * Reads DAILY_BUDGET_USD, falling back to $10 when it's unset, empty or not a
+ * positive number. An empty value would otherwise become $0 and block everything.
+ */
+function parseBudget(raw: string | undefined): number {
+  const budget = Number(raw?.replace(/[$\s]/g, ""));
+  if (raw?.trim() && Number.isFinite(budget) && budget > 0) return budget;
+  if (raw !== undefined) {
+    console.warn(`[guard] Ignoring DAILY_BUDGET_USD=${JSON.stringify(raw)}; using $10.`);
+  }
+  return 10;
+}
 
 const redis =
   (process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL) &&
@@ -86,6 +99,7 @@ export async function reserveSpend(
     await redis.expire(key, 60 * 60 * 48);
     if (spent > DAILY_BUDGET_USD) {
       await redis.incrbyfloat(key, -estimate);
+      console.warn(`[guard] Daily budget reached: $${spent} of $${DAILY_BUDGET_USD}.`);
       return "spent";
     }
   } catch (error) {
