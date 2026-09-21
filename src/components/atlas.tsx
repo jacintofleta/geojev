@@ -255,14 +255,26 @@ export function Atlas() {
 
 function Wordmark() {
   return (
-    <div className="flex items-baseline gap-3">
+    <div className="flex items-center gap-2.5">
+      <WorldMark />
       <h1 className="font-serif text-[34px] leading-none tracking-tight text-ink">
         Geo<span className="text-ember italic">jev</span>
       </h1>
-      <span className="hidden font-mono text-[10px] tracking-[0.18em] whitespace-nowrap text-muted uppercase sm:inline">
-        Ask the world
-      </span>
     </div>
+  );
+}
+
+/** Mapamundi mark: a graticule globe with an ember pin. */
+function WorldMark() {
+  return (
+    <svg viewBox="0 0 32 32" className="size-8 shrink-0 text-ink" fill="none" aria-hidden>
+      <g stroke="currentColor" strokeWidth="1.4">
+        <circle cx="16" cy="16" r="13" />
+        <ellipse cx="16" cy="16" rx="5.5" ry="13" />
+        <path d="M16 3v26M3 16h26M5.2 9.5h21.6M5.2 22.5h21.6" strokeWidth="1" />
+      </g>
+      <circle cx="21.5" cy="11" r="3.2" className="fill-ember stroke-paper" strokeWidth="1.5" />
+    </svg>
   );
 }
 

@@ -20,7 +20,7 @@ const instrumentSerif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "Geojev — ask the world",
+  title: "Geojev",
   description:
     "Type anything. Jev reads it and lights up the countries it most likely points to.",
 };
