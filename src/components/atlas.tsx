@@ -120,8 +120,10 @@ export function Atlas() {
     try {
       const answers = await Promise.all(sidesOf(query).map((side) => locate(side, where)));
       update({ answers });
+      // Easter egg: any mention of Ceuta or Melilla gets a long barrage of Spanish flags.
+      if (/\b(ceuta|melilla)\b/i.test(query)) throwConfetti("🇪🇸", { epic: true });
       // A "vs" throws both sides' emoji (once, if they picked the same one).
-      for (const emoji of new Set(answers.map((a) => a.emoji))) if (emoji) throwConfetti(emoji);
+      else for (const emoji of new Set(answers.map((a) => a.emoji))) if (emoji) throwConfetti(emoji);
     } catch (error) {
       update({
         error: error instanceof Error ? error.message : "Something went wrong.",
