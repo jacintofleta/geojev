@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { WORLD, WORLD_MAP, type LocateResult } from "@/lib/countries";
+import { MATCH, WORLD, WORLD_MAP, type LocateResult } from "@/lib/countries";
 import { scopeKey, type GeoMap, type Scope } from "@/lib/geo";
-import { formatPercent, heat, intensity } from "@/lib/heat";
+import { formatPercent, heat, intensity, versusHeat, type Hue } from "@/lib/heat";
 import { MapView } from "./map-view";
 
 type Entry = {
   id: number;
   query: string;
   scope: Scope;
-  result?: LocateResult;
+  /** One answer, or two for "tea vs coffee". */
+  answers?: LocateResult[];
   error?: string;
 };
 
@@ -20,12 +21,36 @@ const SUGGESTIONS = [
   "Where was tango born?",
   "Best place to see the northern lights",
   "Football",
+  "Tea vs coffee",
   "Where people speak Spanish",
   "Fjords and midnight sun",
   "Pierogi, borscht and vodka",
 ];
 
 const RANKED_ROWS = 6;
+// Rows per side in a "vs" answer.
+const VERSUS_ROWS = 3;
+
+/** "tea vs coffee" is asked as two questions and compared; anything else is one. */
+function sidesOf(query: string): string[] {
+  const sides = query.split(/\s+(?:vs\.?|versus)\s+/i).map((s) => s.trim());
+  return sides.length === 2 && sides.every(Boolean) ? sides : [query];
+}
+
+async function locate(query: string, scope: Scope): Promise<LocateResult> {
+  const res = await fetch("/api/locate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, scope }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
+  return data;
+}
+
+function probabilitiesOf(result: LocateResult) {
+  return new Map(result.ranked.map((r) => [r.id, r.probability]));
+}
 
 function countryById(id: string) {
   return WORLD.countries.find((c) => c.name === id);
@@ -49,12 +74,13 @@ export function Atlas() {
   const loaded: Loaded = scope
     ? (maps[key] ?? { status: "loading" })
     : { status: "ready", map: WORLD_MAP };
-  const pending = entries.some((e) => !e.result && !e.error);
+  const pending = entries.some((e) => !e.answers && !e.error);
   const activeEntry = entries.find((e) => e.id === activeId);
   // Only show an answer on the map it was asked about.
   const active =
-    activeEntry && scopeKey(activeEntry.scope) === key ? activeEntry.result : undefined;
-  const probabilities = new Map(active?.ranked.map((r) => [r.id, r.probability]) ?? []);
+    activeEntry && scopeKey(activeEntry.scope) === key ? activeEntry.answers : undefined;
+  const probabilities = active ? probabilitiesOf(active[0]) : new Map<string, number>();
+  const versus = active?.[1] && probabilitiesOf(active[1]);
 
   useEffect(() => {
     logRef.current?.scrollTo({
@@ -91,14 +117,8 @@ export function Atlas() {
       setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
 
     try {
-      const res = await fetch("/api/locate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, scope: where }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
-      update({ result: data });
+      const answers = await Promise.all(sidesOf(query).map((side) => locate(side, where)));
+      update({ answers });
     } catch (error) {
       update({
         error: error instanceof Error ? error.message : "Something went wrong.",
@@ -140,6 +160,7 @@ export function Atlas() {
               key={key}
               map={loaded.map}
               probabilities={probabilities}
+              versus={versus}
               answerKey={activeId}
               label={
                 scope
@@ -181,11 +202,11 @@ export function Atlas() {
                 key={activeId}
                 className="rise hidden truncate pr-3 font-serif text-3xl leading-tight text-ink italic lg:block"
               >
-                “{activeEntry.query}”
+                <Query text={activeEntry.query} />
               </p>
             )}
           </div>
-          <Legend result={active} />
+          <Legend answers={active} />
         </header>
       </section>
 
@@ -204,7 +225,7 @@ export function Atlas() {
                 key={entry.id}
                 entry={entry}
                 active={entry.id === activeId}
-                onSelect={() => entry.result && selectEntry(entry)}
+                onSelect={() => entry.answers && selectEntry(entry)}
               />
             ))
           )}
@@ -355,7 +376,8 @@ function Intro({ onPick }: { onPick: (q: string) => void }) {
       </p>
       <p className="text-sm leading-relaxed text-muted">
         One request asks Jev a yes/no question about every country at once, and each gets its own
-        calibrated probability. Click a country to ask about its regions instead.
+        calibrated probability. Put <span className="text-ink">vs</span> between two things to
+        compare them on one map. Click a country to ask about its regions instead.
       </p>
       <div className="flex flex-wrap gap-2">
         {SUGGESTIONS.map((s) => (
@@ -372,6 +394,18 @@ function Intro({ onPick }: { onPick: (q: string) => void }) {
   );
 }
 
+/** A question as typed; a "vs" shows each side in its map color. */
+function Query({ text }: { text: string }) {
+  const sides = sidesOf(text);
+  if (sides.length === 1) return <>“{text}”</>;
+  return (
+    <>
+      <span className="text-ember">{sides[0]}</span> <span className="text-muted">vs</span>{" "}
+      <span className="text-tide">{sides[1]}</span>
+    </>
+  );
+}
+
 function EntryView({
   entry,
   active,
@@ -381,7 +415,7 @@ function EntryView({
   active: boolean;
   onSelect: () => void;
 }) {
-  const { result, error, scope } = entry;
+  const { answers, error, scope } = entry;
   const where = scope
     ? `${scope.country} · level ${levelsOf(scope.iso3).findIndex((l) => l.level === scope.level) + 1}`
     : null;
@@ -393,9 +427,11 @@ function EntryView({
           {where}
         </p>
       )}
-      <p className="font-serif text-[22px] leading-snug text-ink">{entry.query}</p>
+      <p className="font-serif text-[22px] leading-snug text-ink">
+        {sidesOf(entry.query).length === 2 ? <Query text={entry.query} /> : entry.query}
+      </p>
 
-      {!result && !error && (
+      {!answers && !error && (
         <div className="mt-3 space-y-2">
           <div className="scan h-px w-full bg-hairline" />
           <p className="font-mono text-[11px] tracking-wider text-muted uppercase">
@@ -406,7 +442,7 @@ function EntryView({
 
       {error && <p className="mt-2 font-mono text-xs text-ember-deep">{error}</p>}
 
-      {result && (
+      {answers && (
         <button
           onClick={onSelect}
           aria-pressed={active}
@@ -416,45 +452,19 @@ function EntryView({
               : "border-transparent opacity-55 hover:border-ink/10 hover:opacity-100"
           }`}
         >
-          {result.matches === 0 && (
-            <p className="mb-2 text-xs text-muted italic">
-              No {scope ? "region" : "country"} stands out for this one.
-            </p>
+          {answers.length === 2 ? (
+            <VersusList a={answers[0]} b={answers[1]} shapes={scope ? "regions" : "countries"} />
+          ) : (
+            <RankedList result={answers[0]} shape={scope ? "region" : "country"} />
           )}
-          <ol className="space-y-1.5">
-            {result.ranked.slice(0, RANKED_ROWS).map((r, i) => (
-              <li
-                key={r.id}
-                className="grid grid-cols-[1.25rem_8.5rem_1fr_3rem] items-center gap-2 font-mono text-xs"
-              >
-                <span className="text-muted">{String(i + 1).padStart(2, "0")}</span>
-                <span
-                  className="truncate text-ink"
-                  title={r.detail ? `${r.name}, ${r.detail}` : r.name}
-                >
-                  {r.name}
-                </span>
-                <span className="h-1.5 overflow-hidden rounded-full bg-ink/[0.06]">
-                  <span
-                    className="block h-full rounded-full transition-[width] duration-700"
-                    style={{
-                      width: `${Math.max(3, r.probability * 100)}%`,
-                      background: heat(Math.max(0.05, intensity(r.probability))),
-                    }}
-                  />
-                </span>
-                <span className="text-right text-ink tabular-nums">
-                  {formatPercent(r.probability)}
-                </span>
-              </li>
-            ))}
-          </ol>
           <p className="mt-3 flex gap-3 font-mono text-[10px] tracking-wider text-muted uppercase">
-            <span>
-              {result.matches} {result.matches === 1 ? "match" : "matches"}
-            </span>
-            <span>{result.cached ? "cached" : `${result.latencyMs}ms`}</span>
-            <span className="truncate">{result.model}</span>
+            {answers.length === 1 && (
+              <span>
+                {answers[0].matches} {answers[0].matches === 1 ? "match" : "matches"}
+              </span>
+            )}
+            <span>{timing(answers)}</span>
+            <span className="truncate">{answers[0].model}</span>
           </p>
         </button>
       )}
@@ -462,23 +472,140 @@ function EntryView({
   );
 }
 
-function Legend({ result }: { result?: LocateResult }) {
+function timing(answers: LocateResult[]): string {
+  if (answers.every((a) => a.cached)) return "cached";
+  return `${Math.max(...answers.filter((a) => !a.cached).map((a) => a.latencyMs))}ms`;
+}
+
+function RankedList({ result, shape }: { result: LocateResult; shape: string }) {
+  return (
+    <>
+      {result.matches === 0 && (
+        <p className="mb-2 text-xs text-muted italic">No {shape} stands out for this one.</p>
+      )}
+      <ol className="space-y-1.5">
+        {result.ranked.slice(0, RANKED_ROWS).map((r, i) => (
+          <li
+            key={r.id}
+            className="grid grid-cols-[1.25rem_8.5rem_1fr_3rem] items-center gap-2 font-mono text-xs"
+          >
+            <span className="text-muted">{String(i + 1).padStart(2, "0")}</span>
+            <span className="truncate text-ink" title={r.detail ? `${r.name}, ${r.detail}` : r.name}>
+              {r.name}
+            </span>
+            <Bar probability={r.probability} />
+            <span className="text-right text-ink tabular-nums">{formatPercent(r.probability)}</span>
+          </li>
+        ))}
+      </ol>
+    </>
+  );
+}
+
+/** A probability bar; `toward: "left"` grows it from the right edge, for the first side of a "vs". */
+function Bar({
+  probability,
+  hue = "ember",
+  toward = "right",
+}: {
+  probability: number;
+  hue?: Hue;
+  toward?: "left" | "right";
+}) {
+  return (
+    <span
+      className={`flex h-1.5 overflow-hidden rounded-full bg-ink/[0.06] ${toward === "left" ? "justify-end" : ""}`}
+    >
+      <span
+        className="block h-full rounded-full transition-[width] duration-700"
+        style={{
+          width: `${Math.max(3, probability * 100)}%`,
+          background: heat(Math.max(0.05, intensity(probability)), hue),
+        }}
+      />
+    </span>
+  );
+}
+
+/**
+ * Two answers side by side: who takes more countries, and the strongest
+ * countries for each side, running from the first side's to the second's.
+ */
+function VersusList({ a, b, shapes }: { a: LocateResult; b: LocateResult; shapes: string }) {
+  const pa = probabilitiesOf(a);
+  const pb = probabilitiesOf(b);
+  const rows = new Map<string, { name: string; detail?: string; a: number; b: number }>();
+  for (const r of [...a.ranked.slice(0, VERSUS_ROWS), ...b.ranked.slice(0, VERSUS_ROWS)]) {
+    rows.set(r.id, { name: r.name, detail: r.detail, a: pa.get(r.id) ?? 0, b: pb.get(r.id) ?? 0 });
+  }
+  const sorted = [...rows.values()].sort((x, y) => y.a - y.b - (x.a - x.b));
+
+  // A side takes a shape when it's a match there and ahead of the other side.
+  const ids = new Set([...pa.keys(), ...pb.keys()]);
+  let winsA = 0;
+  let winsB = 0;
+  for (const id of ids) {
+    const [x, y] = [pa.get(id) ?? 0, pb.get(id) ?? 0];
+    if (Math.max(x, y) < MATCH || x === y) continue;
+    if (x > y) winsA++;
+    else winsB++;
+  }
+
+  return (
+    <>
+      <p className="mb-2.5 grid grid-cols-[1fr_auto_1fr] items-baseline gap-2 font-mono text-xs">
+        <span className="truncate text-ember-deep">
+          <span className="text-base tabular-nums">{winsA}</span> {a.query}
+        </span>
+        <span className="text-[10px] tracking-wider text-muted uppercase">{shapes} taken</span>
+        <span className="truncate text-right text-tide-deep">
+          {b.query} <span className="text-base tabular-nums">{winsB}</span>
+        </span>
+      </p>
+      {winsA + winsB === 0 && (
+        <p className="mb-2 text-xs text-muted italic">Neither stands out anywhere.</p>
+      )}
+      <ol className="space-y-1.5">
+        {sorted.map((r) => (
+          <li
+            key={`${r.name}-${r.detail}`}
+            className="grid grid-cols-[6.5rem_2.25rem_1fr_1fr_2.25rem] items-center gap-1.5 font-mono text-xs"
+          >
+            <span className="truncate text-ink" title={r.detail ? `${r.name}, ${r.detail}` : r.name}>
+              {r.name}
+            </span>
+            <span className="text-right text-ember-deep tabular-nums">{formatPercent(r.a)}</span>
+            <Bar probability={r.a} toward="left" />
+            <Bar probability={r.b} hue="tide" />
+            <span className="text-tide-deep tabular-nums">{formatPercent(r.b)}</span>
+          </li>
+        ))}
+      </ol>
+    </>
+  );
+}
+
+function Legend({ answers }: { answers?: LocateResult[] }) {
+  const [a, b] = answers ?? [];
+  const ramp = b
+    ? ([[0.95, 0], [0.7, 0], [0.8, 0.8], [0, 0.7], [0, 0.95]] as const).map(([x, y]) =>
+        versusHeat(x, y),
+      )
+    : [0, 0.1, 0.3, 0.6, 1].map((t) => heat(t));
   return (
     <div className="shrink-0 space-y-1.5 text-right font-mono text-[10px] tracking-wider text-muted uppercase">
       <div className="flex items-center justify-end gap-2">
-        <span>Less</span>
+        <span className={b ? "max-w-24 truncate text-ember-deep" : ""}>{b ? a.query : "Less"}</span>
         <span
           className="h-1.5 w-16 rounded-full sm:w-28"
-          style={{
-            background: `linear-gradient(90deg, ${[0, 0.1, 0.3, 0.6, 1].map(heat).join(",")})`,
-          }}
+          style={{ background: `linear-gradient(90deg, ${ramp.join(",")})` }}
         />
-        <span>More likely</span>
+        <span className={b ? "max-w-24 truncate text-tide-deep" : ""}>
+          {b ? b.query : "More likely"}
+        </span>
       </div>
       <div className="hidden sm:block">
-        {result
-          ? `${result.model} · ${result.cached ? "cached" : `${result.latencyMs}ms`}`
-          : "Jev · TypeSafe"}
+        {b ? "Purple where both are strong" : a ? `${a.model} · ${timing([a])}` : "Jev · TypeSafe"}
       </div>
     </div>
   );

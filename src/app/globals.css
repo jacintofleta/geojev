@@ -9,6 +9,8 @@
   --land: #dcd5c8;
   --ember: #e0441b;
   --ember-deep: #5f1807;
+  --tide: #2a6bb0;
+  --tide-deep: #0e2747;
 }
 
 @theme inline {
@@ -20,6 +22,8 @@
   --color-land: var(--land);
   --color-ember: var(--ember);
   --color-ember-deep: var(--ember-deep);
+  --color-tide: var(--tide);
+  --color-tide-deep: var(--tide-deep);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-serif: var(--font-instrument-serif);
