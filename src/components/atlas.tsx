@@ -120,8 +120,8 @@ export function Atlas() {
     try {
       const answers = await Promise.all(sidesOf(query).map((side) => locate(side, where)));
       update({ answers });
-      // Easter egg: any mention of Ceuta gets a long barrage of Spanish flags.
-      if (/\bceuta\b/i.test(query)) throwConfetti("🇪🇸", { epic: true });
+      // Easter egg: any mention of Ceuta or Melilla gets a long barrage of Spanish flags.
+      if (/\b(ceuta|melilla)\b/i.test(query)) throwConfetti("🇪🇸", { epic: true });
       // A "vs" throws both sides' emoji (once, if they picked the same one).
       else for (const emoji of new Set(answers.map((a) => a.emoji))) if (emoji) throwConfetti(emoji);
     } catch (error) {

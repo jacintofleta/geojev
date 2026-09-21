@@ -15,7 +15,7 @@ type Burst = {
 };
 
 const NORMAL: Burst = { pieces: 48, waves: 1, gap: 0, size: [22, 48], spread: 350 };
-// The Ceuta easter egg: many more, bigger flags, wave after wave for ~5s.
+// The Ceuta/Melilla easter egg: many more, bigger flags, wave after wave for ~5s.
 const EPIC: Burst = { pieces: 90, waves: 8, gap: 550, size: [26, 90], spread: 900 };
 
 /**
